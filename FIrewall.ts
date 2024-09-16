@@ -23,16 +23,18 @@ class Firewall {
    private blocklistTimestamps: { [ip: string]: Date } = {};
    private actionsLog: string[] = [];
 
-   private allowedMethods: string[] = ['GET', 'POST', 'PUT', 'DELETE'];
+   private allowedMethods: string[] = ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS  '];
    private blockedPorts: number[] = [22, 23, 3389];
    private allowedRoutes: string[] = ['/home', '/about', '/contact'];
+
+   private lastRequestTimes: { [ip: string]: Date } = {};
 
    public isAllowed(request: Request): boolean {
       if (this.isInAllowlist(request) || this.isFromBrazil(request)) {
          return true;
       }
 
-      if (this.isPortBlocked(request) || this.isMethodNotAllowed(request) || this.isRouteNotAllowed(request) || this.isGetRequest(request)) {
+      if (this.isPortBlocked(request) || this.isMethodNotAllowed(request) || this.isRouteNotAllowed(request) || this.isGetRequest(request) || this.isTooFast(request)) {
          this.blockAndLogRequest(request);
          return false;
       }
@@ -42,8 +44,19 @@ class Firewall {
       }
 
       this.logAllowedRequest(request);
+      this.lastRequestTimes[request.clientIP] = request.edgeStartTimestamp;
       return true;
    }
+
+   private isTooFast(request: Request): boolean {
+      const lastRequestTime = this.lastRequestTimes[request.clientIP];
+      if (lastRequestTime) {
+         const timeDifference = request.edgeStartTimestamp.getTime() - lastRequestTime.getTime();
+         return timeDifference < 1000; // 1 second, adjust as needed
+      }
+      return false;
+   }
+
 
    private isInAllowlist(request: Request): boolean {
       const allowed = this.allowlist.includes(request.clientIP);
