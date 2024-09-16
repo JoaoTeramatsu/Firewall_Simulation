@@ -57,8 +57,8 @@
          for (const { check, reason } of reasons) {
             if (check()) {
                if (!this.flaggedIps.has(request.clientIP)) {
-                  this.blockAndLogRequest(request, reason); // Ensuring the count is handled here
                   this.flaggedIps.add(request.clientIP);
+                  if(this.checkFlaggedIP(request, reason)){return true}
                }
                return false;
             }
@@ -74,15 +74,18 @@
          return true;
       }
 
-      private blockAndLogRequest(request: Request, reason: string): void {
+      private checkFlaggedIP(request: Request, reason: string): boolean {
          if (this.allowlist.has(request.clientIP)) {
             this.flaggedIps.add(request.clientIP);
             this.allowlist.delete(request.clientIP);
             this.actionsLog.push(`IP flagged: ${request.clientIP}`);
+            this.actionsLog.push(`Request allowed: ${JSON.stringify(request, null, 2)}\n But the IP ${request.clientIP} has been removed from the allowlist.`);
+            return true;
          } else {
             this.addToBlocklist(request.clientIP, request.edgeStartTimestamp);
+            this.actionsLog.push(`Request blocked due to ${reason}: ${JSON.stringify(request, null, 2)}`);
+            return false;
          }
-         this.actionsLog.push(`Request blocked due to ${reason}: ${JSON.stringify(request, null, 2)}`);
       }
 
       private logAllowedRequest(request: Request): void {
