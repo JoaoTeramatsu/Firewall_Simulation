@@ -1,20 +1,26 @@
 import * as fs from 'fs';
 import * as readline from 'readline';
-import url from 'url';
 class Firewall {
     constructor() {
         // private allowlist: string[] = ['192.168.1.1'];
-        this.allowlist = new Set();
+        this.allowlist = new Set(['192.168.1.1']);
         this.flaggedIps = new Set();
         this.blocklist = new Set();
+        // private blocklistTimestamps = new Map<string, BlockedIpInfo>();
         this.blocklistTimestamps = new Map(); // Timestamps to check when to allow ips after 12 hours
         this.actionsLog = [];
         this.allowedMethods = new Set(['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS']);
         this.blockedRoutes = new Set(['/etc/passwd', '/console', '/aux', '/storage']);
         this.lastRequestTimes = new Map();
         this.requestCounters = new Map();
+        this.blockedReqCount = 0;
+        this.blockedIpCount = 0;
+        this.unblockedCount = 0;
+        this.allowedCount = 0;
+        this.requestCount = 0;
     }
     isAllowed(request) {
+        this.requestCount++;
         this.removeOldBlockedIps(request.edgeStartTimestamp);
         if (this.isInAllowlist(request)) {
             return true;
@@ -46,6 +52,7 @@ class Firewall {
         return true;
     }
     blockAndLogRequest(request, reason) {
+        this.blockedReqCount++;
         if (this.allowlist.has(request.clientIP)) {
             // If the IP is in the allowlist, just flag it
             this.flaggedIps.add(request.clientIP);
@@ -53,6 +60,7 @@ class Firewall {
         }
         else {
             // If the IP is not in the allowlist, block it
+            this.blockedIpCount++;
             this.addToBlocklist(request.clientIP, request.edgeStartTimestamp);
         }
         this.actionsLog.push(`Request blocked due to ${reason}: ${JSON.stringify(request, null, 2)}`);
@@ -67,6 +75,7 @@ class Firewall {
         for (const [ip, blockedSince] of this.blocklistTimestamps.entries()) {
             const twelveHoursLater = new Date(blockedSince.getTime() + 12 * 60 * 60 * 1000);
             if (currentTime >= twelveHoursLater) {
+                this.unblockedCount++;
                 this.removeFromBlocklist(ip);
                 this.flaggedIps.delete(ip);
                 this.actionsLog.push(`IP unblocked and unflagged after 12 hours: ${ip}`);
@@ -74,7 +83,7 @@ class Firewall {
         }
     }
     isPathDiscrepancy(request) {
-        const uriPath = url.parse(request.clientRequestURI).pathname;
+        const uriPath = request.clientRequestURI.split('?')[0];
         return uriPath !== request.clientRequestPath;
     }
     isNonStandardPort(request) {
@@ -108,9 +117,6 @@ class Firewall {
     isMethodNotAllowed(request) {
         return !this.allowedMethods.has(request.clientRequestMethod);
     }
-    // private isRouteNotAllowed(request: Request): boolean {
-    //    return !this.blockedRoutes.has(request.clientRequestPath);
-    // }
     isIpBlocked(request) {
         const blockedSince = this.blocklistTimestamps[request.clientIP];
         if (blockedSince) {
@@ -126,6 +132,7 @@ class Firewall {
         return false;
     }
     logAllowedRequest(request) {
+        this.allowedCount++;
         this.actionsLog.push(`Request allowed: ${JSON.stringify(request, null, 2)}`);
     }
     logBlockedRequest(request) {
@@ -149,9 +156,14 @@ class Firewall {
         }
     }
     printActionsLog() {
-        const logData = this.actionsLog.join('\n');
+        const summary = `Total requests: ${this.requestCount}\n` +
+            `Requests Blocked: ${this.blockedReqCount}\n` +
+            `Requests Allowed: ${this.allowedCount}\n` +
+            `IPs Blocked: ${this.unblockedCount}\n` +
+            `IPs Unblocked: ${this.unblockedCount}\n`;
+        const logData = summary + this.actionsLog.join('\n');
         console.log(logData);
-        fs.appendFile('firewall.log', logData + '\n', err => {
+        fs.writeFile('firewall.log', logData + '\n', err => {
             if (err) {
                 console.error(err);
             }
