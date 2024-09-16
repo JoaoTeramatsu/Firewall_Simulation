@@ -10,8 +10,8 @@ This project simulates the functions of a firewall, assessing and filtering netw
 ## Installation
 
 1. Clone this repository to your local machine using `git clone`.
-2. Navigate into the project folder using `cd folder-name`.
-3. Install the necessary dependencies using `npm install`.
+2. Navigate into the project folder using `cd /src`.
+4. Install the necessary dependencies using `npm install`.
 
 ## Execution
 
