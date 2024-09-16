@@ -18,22 +18,20 @@ interface Request {
    clientRequestUserAgent: string;
 }
 class Firewall {
-   private blockAndLogRequest(request: Request, reason: string): void {
-      this.addToBlocklist(request.clientIP, request.edgeStartTimestamp);
-      this.actionsLog.push(`Request blocked due to ${reason}: ${JSON.stringify(request)}`);
-   }   
-
    private allowlist: string[] = ['192.168.1.1'];
    private blocklist: Set<string> = new Set();
    private blocklistTimestamps: Map<string, Date> = new Map();
    private actionsLog: string[] = [];
-
    private allowedMethods: Set<string> = new Set(['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS']);
    private blockedPorts: Set<number> = new Set([22, 23, 3389]);
    private allowedRoutes: Set<string> = new Set(['/home', '/about', '/contact']);
-
+   private blockedRoutes: Set<string> = new Set(['/home']);
    private lastRequestTimes: Map<string, Date> = new Map();
-
+   
+   private blockAndLogRequest(request: Request, reason: string): void {
+      this.addToBlocklist(request.clientIP, request.edgeStartTimestamp);
+      this.actionsLog.push(`Request blocked due to ${reason}: ${JSON.stringify(request)}`);
+   }   
    public isAllowed(request: Request): boolean {
       this.removeOldBlockedIps();
       if (this.isInAllowlist(request)) {
@@ -44,7 +42,6 @@ class Firewall {
          { check: () => this.isPortBlocked(request), reason: 'port blocking' },
          { check: () => this.isMethodNotAllowed(request), reason: 'method not allowed' },
          { check: () => this.isRouteNotAllowed(request), reason: 'route not allowed' },
-         { check: () => this.isGetRequest(request), reason: 'GET request' },
          { check: () => this.isTooFast(request), reason: 'too many requests' },
          { check: () => this.isSqlInjection(request), reason: 'SQL injection detected' },
          { check: () => this.isXssAttack(request), reason: 'XSS attack detected' },
@@ -118,10 +115,6 @@ class Firewall {
    
    private isRouteNotAllowed(request: Request): boolean {
       return !this.allowedRoutes.has(request.clientRequestPath);
-   }
-
-   private isGetRequest(request: Request): boolean {
-      return request.clientRequestMethod === 'GET';
    }
 
    private isIpBlocked(request: Request): boolean {
