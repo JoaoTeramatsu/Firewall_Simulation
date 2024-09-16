@@ -6,7 +6,6 @@ class Firewall {
         this.allowlist = new Set(['192.168.1.1']);
         this.flaggedIps = new Set();
         this.blocklist = new Set();
-        // private blocklistTimestamps = new Map<string, BlockedIpInfo>();
         this.blocklistTimestamps = new Map(); // Timestamps to check when to allow ips after 12 hours
         this.actionsLog = [];
         this.allowedMethods = new Set(['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS']);
@@ -14,16 +13,14 @@ class Firewall {
         this.lastRequestTimes = new Map();
         this.requestCounters = new Map();
         this.blockedReqCount = 0;
-        this.blockedIpCount = 0;
-        this.unblockedCount = 0;
-        this.allowedCount = 0;
+        this.allowedReqCount = 0;
         this.requestCount = 0;
     }
     isAllowed(request) {
         this.requestCount++;
         this.removeOldBlockedIps(request.edgeStartTimestamp);
-        if (this.isInAllowlist(request)) {
-            return true;
+        if (this.isIpBlocked(request)) {
+            return false;
         }
         const reasons = [
             { check: () => this.isInjectionAttack(request), reason: 'Injection attack detected' },
@@ -43,10 +40,10 @@ class Firewall {
                 return false;
             }
         }
-        if (this.isIpBlocked(request)) {
-            return false;
+        if (this.isInAllowlist(request)) {
+            return true;
         }
-        this.allowlist.add(request.clientIP);
+        this.addToAllowlist(request.clientIP);
         this.logAllowedRequest(request);
         this.lastRequestTimes.set(request.clientIP, request.edgeStartTimestamp);
         return true;
@@ -54,18 +51,17 @@ class Firewall {
     blockAndLogRequest(request, reason) {
         this.blockedReqCount++;
         if (this.allowlist.has(request.clientIP)) {
-            // If the IP is in the allowlist, just flag it
+            // If the IP is in the allowlist, just flag it and remove it from the allowlist
             this.flaggedIps.add(request.clientIP);
+            this.allowlist.delete(request.clientIP);
             this.actionsLog.push(`IP flagged: ${request.clientIP}`);
         }
         else {
             // If the IP is not in the allowlist, block it
-            this.blockedIpCount++;
             this.addToBlocklist(request.clientIP, request.edgeStartTimestamp);
         }
         this.actionsLog.push(`Request blocked due to ${reason}: ${JSON.stringify(request, null, 2)}`);
     }
-    //validar case sensitive e onerror 
     isInjectionAttack(request) {
         const sqlInjectionPattern = /(\bSELECT\b|\bDELETE\b|\bUPDATE\b|\bINSERT\b|\bWHERE\b|=|--|\bOR\b)/i;
         const xssInjectionPattern = /(<\s*script\b|\balert\s*\(|<\s*img\b|<\s*a\b|<\s*body\b|<\s*iframe\b|<\s*input\b|<\s*form\b|<\s*div\b|\bonerror\b)/i;
@@ -75,7 +71,6 @@ class Firewall {
         for (const [ip, blockedSince] of this.blocklistTimestamps.entries()) {
             const twelveHoursLater = new Date(blockedSince.getTime() + 12 * 60 * 60 * 1000);
             if (currentTime >= twelveHoursLater) {
-                this.unblockedCount++;
                 this.removeFromBlocklist(ip);
                 this.flaggedIps.delete(ip);
                 this.actionsLog.push(`IP unblocked and unflagged after 12 hours: ${ip} || Time it was blocked: ${blockedSince} - Current Time: ${currentTime} `);
@@ -98,8 +93,6 @@ class Firewall {
     isDDoSAttack(request) {
         const count = this.requestCounters.get(request.clientIP) || 0;
         this.requestCounters.set(request.clientIP, count + 1);
-        // Check if the number of requests exceeds a limit (e.g., 10 requests)
-        // in a certain period of time (e.g., 1 minute)
         if (count > 1000) {
             // Reset the counter
             this.requestCounters.set(request.clientIP, 0);
@@ -107,15 +100,15 @@ class Firewall {
         }
         return false;
     }
+    isMethodNotAllowed(request) {
+        return !this.allowedMethods.has(request.clientRequestMethod);
+    }
     isInAllowlist(request) {
         const allowed = this.allowlist.has(request.clientIP);
         if (allowed) {
             this.logAllowedRequest(request);
         }
         return allowed;
-    }
-    isMethodNotAllowed(request) {
-        return !this.allowedMethods.has(request.clientRequestMethod);
     }
     isIpBlocked(request) {
         const blockedSince = this.blocklistTimestamps[request.clientIP];
@@ -132,11 +125,12 @@ class Firewall {
         return false;
     }
     logAllowedRequest(request) {
-        this.allowedCount++;
+        this.allowedReqCount++;
         this.actionsLog.push(`Request allowed: ${JSON.stringify(request, null, 2)}`);
     }
     logBlockedRequest(request) {
-        this.actionsLog.push(`Request blocked: ${JSON.stringify(request, null, 2)}`);
+        this.blockedReqCount++;
+        this.actionsLog.push(`Request blocked: ${JSON.stringify(request, null, 2)} due to IP is still being in blocklist.`);
     }
     addToBlocklist(ip, timestamp) {
         this.blocklist.add(ip);
@@ -158,9 +152,7 @@ class Firewall {
     printActionsLog() {
         const summary = `Total requests: ${this.requestCount}\n` +
             `Requests Blocked: ${this.blockedReqCount}\n` +
-            `Requests Allowed: ${this.allowedCount}\n` +
-            `IPs Blocked: ${this.blockedIpCount}\n` +
-            `IPs Unblocked: ${this.unblockedCount}\n - - - - - - - - - - - - - - - - - - - - - - - - - -\n`;
+            `Requests Allowed: ${this.allowedReqCount}\n - - - - - - - - - - - - - - - - - - - - - - - - - -\n`;
         const logData = summary + this.actionsLog.join('\n');
         console.log(logData);
         fs.writeFile('firewall.log', logData + '\n', err => {
