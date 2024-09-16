@@ -108,7 +108,7 @@ class Firewall {
             this.unblockedCount++;
             this.removeFromBlocklist(ip);
             this.flaggedIps.delete(ip);
-            this.actionsLog.push(`IP unblocked and unflagged after 12 hours: ${ip}`);
+            this.actionsLog.push(`IP unblocked and unflagged after 12 hours: ${ip} || Time it was blocked: ${blockedSince} - Current Time: ${currentTime} `);
          }
       }
    }
@@ -205,7 +205,7 @@ class Firewall {
          `Requests Blocked: ${this.blockedReqCount}\n` +
          `Requests Allowed: ${this.allowedCount}\n` +
          `IPs Blocked: ${this.blockedIpCount}\n` + 
-         `IPs Unblocked: ${this.unblockedCount}\n`;
+         `IPs Unblocked: ${this.unblockedCount}\n - - - - - - - - - - - - - - - - - - - - - - - - - -\n`;
       const logData = summary + this.actionsLog.join('\n');
       console.log(logData);
 
