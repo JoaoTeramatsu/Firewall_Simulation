@@ -1,28 +1,29 @@
 import * as fs from 'fs';
 import * as readline from 'readline';
+import url from 'url';
 class Firewall {
     constructor() {
         // private allowlist: string[] = ['192.168.1.1'];
         this.allowlist = new Set();
+        this.flaggedIps = new Set();
         this.blocklist = new Set();
         this.blocklistTimestamps = new Map(); // Timestamps to check when to allow ips after 12 hours
         this.actionsLog = [];
         this.allowedMethods = new Set(['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS']);
-        // private blockedRoutes: Set<string> = new Set(['/home']);
+        this.blockedRoutes = new Set(['/etc/passwd', '/console', '/aux', '/storage']);
         this.lastRequestTimes = new Map();
-        this.flaggedIps = new Set();
         this.requestCounters = new Map();
     }
     isAllowed(request) {
-        this.removeOldBlockedIps();
+        this.removeOldBlockedIps(request.edgeStartTimestamp);
         if (this.isInAllowlist(request)) {
             return true;
         }
         const reasons = [
-            { check: () => this.isMethodNotAllowed(request), reason: 'method not allowed' },
-            // { check: () => this.isRouteNotAllowed(request), reason: 'route not allowed' },
-            { check: () => this.isDDoSAttack(request), reason: 'too many requests' },
             { check: () => this.isInjectionAttack(request), reason: 'Injection attack detected' },
+            { check: () => this.isMethodNotAllowed(request), reason: 'method not allowed' },
+            { check: () => this.isRouteNotAllowed(request), reason: 'route not allowed' },
+            { check: () => this.isDDoSAttack(request), reason: 'too many requests' },
             { check: () => this.isDotSlashAttack(request), reason: 'dot-slash attack detected' },
             { check: () => this.isPathDiscrepancy(request), reason: 'path discrepancy detected' },
             { check: () => this.isNonStandardPort(request), reason: 'non-standard source port' }
@@ -32,7 +33,6 @@ class Firewall {
                 if (!this.flaggedIps.has(request.clientIP)) {
                     this.blockAndLogRequest(request, reason);
                     this.flaggedIps.add(request.clientIP);
-                    this.actionsLog.push(`IP flagged: ${request.clientIP}`);
                 }
                 return false;
             }
@@ -46,36 +46,50 @@ class Firewall {
         return true;
     }
     blockAndLogRequest(request, reason) {
-        this.addToBlocklist(request.clientIP, request.edgeStartTimestamp);
+        if (this.allowlist.has(request.clientIP)) {
+            // If the IP is in the allowlist, just flag it
+            this.flaggedIps.add(request.clientIP);
+            this.actionsLog.push(`IP flagged: ${request.clientIP}`);
+        }
+        else {
+            // If the IP is not in the allowlist, block it
+            this.addToBlocklist(request.clientIP, request.edgeStartTimestamp);
+        }
         this.actionsLog.push(`Request blocked due to ${reason}: ${JSON.stringify(request, null, 2)}`);
     }
-    removeOldBlockedIps() {
-        const now = new Date();
+    //validar case sensitive e onerror 
+    isInjectionAttack(request) {
+        const sqlInjectionPattern = /(\bSELECT\b|\bDELETE\b|\bUPDATE\b|\bINSERT\b|\bWHERE\b|=|--|\bOR\b)/i;
+        const xssInjectionPattern = /(<\s*script\b|\balert\s*\(|<\s*img\b|<\s*a\b|<\s*body\b|<\s*iframe\b|<\s*input\b|<\s*form\b|<\s*div\b|\bonerror\b)/i;
+        return sqlInjectionPattern.test(request.clientRequestPath) || xssInjectionPattern.test(request.clientRequestPath);
+    }
+    removeOldBlockedIps(currentTime) {
         for (const [ip, blockedSince] of this.blocklistTimestamps.entries()) {
             const twelveHoursLater = new Date(blockedSince.getTime() + 12 * 60 * 60 * 1000);
-            if (now >= twelveHoursLater) {
+            if (currentTime >= twelveHoursLater) {
                 this.removeFromBlocklist(ip);
-                this.actionsLog.push(`IP unblocked after 12 hours: ${ip}`);
+                this.flaggedIps.delete(ip);
+                this.actionsLog.push(`IP unblocked and unflagged after 12 hours: ${ip}`);
             }
         }
     }
     isPathDiscrepancy(request) {
-        return request.clientRequestURI !== request.clientRequestPath;
+        const uriPath = url.parse(request.clientRequestURI).pathname;
+        return uriPath !== request.clientRequestPath;
     }
     isNonStandardPort(request) {
         return request.clientSrcPort < 49152 || request.clientSrcPort > 65535;
     }
-    isInjectionAttack(request) {
-        const injectionPattern = /(\b(SELECT|DELETE|UPDATE|INSERT)\b|\bWHERE\b|=|--|\bOR\b)|(<\s*script\b)|(\balert\s*\()|(<\s*img\b)|(<\s*a\b)|(<\s*body\b)|(<\s*iframe\b)|(<\s*input\b)|(<\s*form\b)|(<\s*div\b)/i;
-        return injectionPattern.test(request.clientRequestPath);
-    }
     isDotSlashAttack(request) {
         return request.clientRequestPath.includes('/../');
+    }
+    isRouteNotAllowed(request) {
+        return this.blockedRoutes.has(request.clientRequestPath);
     }
     isDDoSAttack(request) {
         const count = this.requestCounters.get(request.clientIP) || 0;
         this.requestCounters.set(request.clientIP, count + 1);
-        // Check if the number of requests exceeds a limit (e.g., 1000 requests)
+        // Check if the number of requests exceeds a limit (e.g., 10 requests)
         // in a certain period of time (e.g., 1 minute)
         if (count > 1000) {
             // Reset the counter
