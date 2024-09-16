@@ -2,28 +2,76 @@ import * as fs from 'fs';
 class Firewall {
     constructor() {
         this.allowlist = ['192.168.1.1'];
-        this.blocklist = [];
-        this.blocklistTimestamps = {};
+        this.blocklist = new Set();
+        this.blocklistTimestamps = new Map();
         this.actionsLog = [];
-        this.allowedMethods = ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS  '];
-        this.blockedPorts = [22, 23, 3389];
-        this.allowedRoutes = ['/home', '/about', '/contact'];
-        this.lastRequestTimes = {};
+        this.allowedMethods = new Set(['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS']);
+        // private blockedRoutes: Set<string> = new Set(['/home']);
+        this.lastRequestTimes = new Map();
+        this.flaggedIps = new Set();
+    }
+    blockAndLogRequest(request, reason) {
+        this.addToBlocklist(request.clientIP, request.edgeStartTimestamp);
+        this.actionsLog.push(`Request blocked due to ${reason}: ${JSON.stringify(request)}`);
     }
     isAllowed(request) {
-        if (this.isInAllowlist(request) || this.isFromBrazil(request)) {
+        this.removeOldBlockedIps();
+        if (this.isInAllowlist(request)) {
             return true;
         }
-        if (this.isPortBlocked(request) || this.isMethodNotAllowed(request) || this.isRouteNotAllowed(request) || this.isGetRequest(request) || this.isTooFast(request)) {
-            this.blockAndLogRequest(request);
-            return false;
+        const reasons = [
+            { check: () => this.isMethodNotAllowed(request), reason: 'method not allowed' },
+            // { check: () => this.isRouteNotAllowed(request), reason: 'route not allowed' },
+            { check: () => this.isTooFast(request), reason: 'too many requests' },
+            { check: () => this.isSqlInjection(request), reason: 'SQL injection detected' },
+            { check: () => this.isXssAttack(request), reason: 'XSS attack detected' },
+            { check: () => this.isDotSlashAttack(request), reason: 'dot-slash attack detected' },
+            { check: () => this.isPathDiscrepancy(request), reason: 'path discrepancy detected' },
+            { check: () => this.isNonStandardPort(request), reason: 'non-standard source port' }
+        ];
+        for (const { check, reason } of reasons) {
+            if (check()) {
+                if (!this.flaggedIps.has(request.clientIP)) {
+                    this.blockAndLogRequest(request, reason);
+                    this.flaggedIps.add(request.clientIP);
+                    this.actionsLog.push(`IP flagged: ${request.clientIP}`);
+                }
+                return false;
+            }
         }
         if (this.isIpBlocked(request)) {
             return false;
         }
+        this.allowlist.push(request.clientIP);
         this.logAllowedRequest(request);
-        this.lastRequestTimes[request.clientIP] = request.edgeStartTimestamp;
+        this.lastRequestTimes.set(request.clientIP, request.edgeStartTimestamp);
         return true;
+    }
+    removeOldBlockedIps() {
+        const now = new Date();
+        for (const [ip, blockedSince] of this.blocklistTimestamps.entries()) {
+            const twelveHoursLater = new Date(blockedSince.getTime() + 12 * 60 * 60 * 1000);
+            if (now >= twelveHoursLater) {
+                this.removeFromBlocklist(ip);
+            }
+        }
+    }
+    isPathDiscrepancy(request) {
+        return request.clientRequestURI !== request.clientRequestPath;
+    }
+    isNonStandardPort(request) {
+        return request.clientSrcPort < 49152 || request.clientSrcPort > 65535;
+    }
+    isSqlInjection(request) {
+        const sqlInjectionPattern = /(\b(SELECT|DELETE|UPDATE|INSERT)\b|\bWHERE\b|=|--|\bOR\b)/i;
+        return sqlInjectionPattern.test(request.clientRequestPath);
+    }
+    isXssAttack(request) {
+        const xssPattern = /(<\s*script\b)|(\balert\s*\()|(<\s*img\b)|(<\s*a\b)|(<\s*body\b)|(<\s*iframe\b)|(<\s*input\b)|(<\s*form\b)|(<\s*div\b)/i;
+        return xssPattern.test(request.clientRequestPath);
+    }
+    isDotSlashAttack(request) {
+        return request.clientRequestPath.includes('/../');
     }
     isTooFast(request) {
         const lastRequestTime = this.lastRequestTimes[request.clientIP];
@@ -40,25 +88,12 @@ class Firewall {
         }
         return allowed;
     }
-    isFromBrazil(request) {
-        const allowed = request.clientCountry === 'br';
-        if (allowed) {
-            this.logAllowedRequest(request);
-        }
-        return allowed;
-    }
-    isPortBlocked(request) {
-        return this.blockedPorts.includes(request.clientSrcPort);
-    }
     isMethodNotAllowed(request) {
-        return !this.allowedMethods.includes(request.clientRequestMethod);
+        return !this.allowedMethods.has(request.clientRequestMethod);
     }
-    isRouteNotAllowed(request) {
-        return !this.allowedRoutes.includes(request.clientRequestPath);
-    }
-    isGetRequest(request) {
-        return request.clientRequestMethod === 'GET';
-    }
+    // private isRouteNotAllowed(request: Request): boolean {
+    //    return !this.blockedRoutes.has(request.clientRequestPath);
+    // }
     isIpBlocked(request) {
         const blockedSince = this.blocklistTimestamps[request.clientIP];
         if (blockedSince) {
@@ -73,10 +108,6 @@ class Firewall {
         }
         return false;
     }
-    blockAndLogRequest(request) {
-        this.addToBlocklist(request.clientIP, request.edgeStartTimestamp);
-        this.logBlockedRequest(request);
-    }
     logAllowedRequest(request) {
         this.actionsLog.push(`Request allowed: ${JSON.stringify(request)}`);
     }
@@ -84,15 +115,14 @@ class Firewall {
         this.actionsLog.push(`Request blocked: ${JSON.stringify(request)}`);
     }
     addToBlocklist(ip, timestamp) {
-        this.blocklist.push(ip);
-        this.blocklistTimestamps[ip] = timestamp;
+        this.blocklist.add(ip);
+        this.blocklistTimestamps.set(ip, timestamp);
         this.actionsLog.push(`IP added to blocklist: ${ip}`);
     }
     removeFromBlocklist(ip) {
-        const index = this.blocklist.indexOf(ip);
-        if (index > -1) {
-            this.blocklist.splice(index, 1);
-            delete this.blocklistTimestamps[ip];
+        if (this.blocklist.has(ip)) {
+            this.blocklist.delete(ip);
+            this.blocklistTimestamps.delete(ip);
             this.actionsLog.push(`IP removed from blocklist: ${ip}`);
         }
     }
@@ -110,7 +140,7 @@ class Firewall {
     }
 }
 const firewall = new Firewall();
-fs.readFile('./datasets/sampleDataset1.csv', 'utf8', (err, data) => {
+fs.readFile('./datasets/dataset.csv', 'utf8', (err, data) => {
     if (err) {
         console.error(err);
         return;
