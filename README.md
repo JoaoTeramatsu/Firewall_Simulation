@@ -16,7 +16,7 @@ This project simulates the functions of a firewall, assessing and filtering netw
 ## Execution
 
 1. Transpile the TypeScript code to JavaScript using `npx tsc`.
-2. Run the generated JavaScript script using `node ./dist/index.js` in your terminal.s
+2. Run the generated JavaScript script using `node ./dist/index.js` in your terminal.
 
 ## Features
 
