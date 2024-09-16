@@ -34,7 +34,7 @@ class Firewall {
         for (const { check, reason } of reasons) {
             if (check()) {
                 if (!this.flaggedIps.has(request.clientIP)) {
-                    this.blockAndLogRequest(request, reason);
+                    this.blockAndLogRequest(request, reason); // Ensuring the count is handled here
                     this.flaggedIps.add(request.clientIP);
                 }
                 return false;
@@ -44,23 +44,23 @@ class Firewall {
             return true;
         }
         this.addToAllowlist(request.clientIP);
-        this.logAllowedRequest(request);
+        this.logAllowedRequest(request); // Only handle the allowed count here
         this.lastRequestTimes.set(request.clientIP, request.edgeStartTimestamp);
         return true;
     }
     blockAndLogRequest(request, reason) {
-        this.blockedReqCount++;
         if (this.allowlist.has(request.clientIP)) {
-            // If the IP is in the allowlist, just flag it and remove it from the allowlist
             this.flaggedIps.add(request.clientIP);
             this.allowlist.delete(request.clientIP);
             this.actionsLog.push(`IP flagged: ${request.clientIP}`);
         }
         else {
-            // If the IP is not in the allowlist, block it
             this.addToBlocklist(request.clientIP, request.edgeStartTimestamp);
         }
         this.actionsLog.push(`Request blocked due to ${reason}: ${JSON.stringify(request, null, 2)}`);
+    }
+    logAllowedRequest(request) {
+        this.actionsLog.push(`Request allowed: ${JSON.stringify(request, null, 2)}`);
     }
     isInjectionAttack(request) {
         const sqlInjectionPattern = /(\bSELECT\b|\bDELETE\b|\bUPDATE\b|\bINSERT\b|\bWHERE\b|=|--|\bOR\b)/i;
@@ -124,12 +124,7 @@ class Firewall {
         }
         return false;
     }
-    logAllowedRequest(request) {
-        this.allowedReqCount++;
-        this.actionsLog.push(`Request allowed: ${JSON.stringify(request, null, 2)}`);
-    }
     logBlockedRequest(request) {
-        this.blockedReqCount++;
         this.actionsLog.push(`Request blocked: ${JSON.stringify(request, null, 2)} due to IP is still being in blocklist.`);
     }
     addToBlocklist(ip, timestamp) {
@@ -180,7 +175,13 @@ fs.readFile('./datasets/dataset.csv', 'utf8', (err, data) => {
     const lines = data.split('\n');
     for (let i = 1; i < lines.length; i++) {
         const request = createRequestFromLine(lines[i]);
-        firewall.isAllowed(request);
+        let isAllowed = firewall.isAllowed(request);
+        if (isAllowed) {
+            firewall.allowedReqCount++;
+        }
+        else {
+            firewall.blockedReqCount++;
+        }
     }
     firewall.printActionsLog();
     // Start listening for user commands

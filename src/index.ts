@@ -31,8 +31,8 @@
       private lastRequestTimes: Map<string, Date> = new Map();
       private requestCounters: Map<string, number> = new Map();
 
-      private blockedReqCount = 0;
-      private allowedReqCount = 0;
+      public blockedReqCount = 0;
+      public allowedReqCount = 0;
       private requestCount = 0;
       
 
@@ -82,12 +82,10 @@
          } else {
             this.addToBlocklist(request.clientIP, request.edgeStartTimestamp);
          }
-         this.blockedReqCount++; // Incrementa contagem de bloqueios apenas aqui
          this.actionsLog.push(`Request blocked due to ${reason}: ${JSON.stringify(request, null, 2)}`);
       }
 
       private logAllowedRequest(request: Request): void {
-         this.allowedReqCount++; // Incrementa contagem de permitidos apenas aqui
          this.actionsLog.push(`Request allowed: ${JSON.stringify(request, null, 2)}`);
       }
    
@@ -166,7 +164,6 @@
       }
 
       private logBlockedRequest(request: Request): void {
-         this.blockedReqCount++;
          this.actionsLog.push(`Request blocked: ${JSON.stringify(request, null, 2)} due to IP is still being in blocklist.`);
       }
 
@@ -226,7 +223,10 @@
 
       for (let i = 1; i < lines.length; i++) {
          const request = createRequestFromLine(lines[i]);
-         firewall.isAllowed(request);
+         let isAllowed = firewall.isAllowed(request);
+         if(isAllowed){
+            firewall.allowedReqCount++;
+         }else{firewall.blockedReqCount++;}
       }
 
       firewall.printActionsLog();
