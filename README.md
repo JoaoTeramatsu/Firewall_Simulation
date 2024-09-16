@@ -27,7 +27,3 @@ This project simulates the functions of a firewall, assessing and filtering netw
 - It includes additional features like DDoS attack prevention and SQL/XSS injection detection.
 
 Feel free to explore the code and contribute!
-
-## License
-
-This project is licensed under the MIT License - see the LICENSE.md file for details.
