@@ -1,18 +1,17 @@
 import * as fs from 'fs';
+import * as readline from 'readline';
 class Firewall {
     constructor() {
-        this.allowlist = ['192.168.1.1'];
+        // private allowlist: string[] = ['192.168.1.1'];
+        this.allowlist = new Set();
         this.blocklist = new Set();
-        this.blocklistTimestamps = new Map();
+        this.blocklistTimestamps = new Map(); // Timestamps to check when to allow ips after 12 hours
         this.actionsLog = [];
         this.allowedMethods = new Set(['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS']);
         // private blockedRoutes: Set<string> = new Set(['/home']);
         this.lastRequestTimes = new Map();
         this.flaggedIps = new Set();
-    }
-    blockAndLogRequest(request, reason) {
-        this.addToBlocklist(request.clientIP, request.edgeStartTimestamp);
-        this.actionsLog.push(`Request blocked due to ${reason}: ${JSON.stringify(request)}`);
+        this.requestCounters = new Map();
     }
     isAllowed(request) {
         this.removeOldBlockedIps();
@@ -22,9 +21,8 @@ class Firewall {
         const reasons = [
             { check: () => this.isMethodNotAllowed(request), reason: 'method not allowed' },
             // { check: () => this.isRouteNotAllowed(request), reason: 'route not allowed' },
-            { check: () => this.isTooFast(request), reason: 'too many requests' },
-            { check: () => this.isSqlInjection(request), reason: 'SQL injection detected' },
-            { check: () => this.isXssAttack(request), reason: 'XSS attack detected' },
+            { check: () => this.isDDoSAttack(request), reason: 'too many requests' },
+            { check: () => this.isInjectionAttack(request), reason: 'Injection attack detected' },
             { check: () => this.isDotSlashAttack(request), reason: 'dot-slash attack detected' },
             { check: () => this.isPathDiscrepancy(request), reason: 'path discrepancy detected' },
             { check: () => this.isNonStandardPort(request), reason: 'non-standard source port' }
@@ -42,10 +40,14 @@ class Firewall {
         if (this.isIpBlocked(request)) {
             return false;
         }
-        this.allowlist.push(request.clientIP);
+        this.allowlist.add(request.clientIP);
         this.logAllowedRequest(request);
         this.lastRequestTimes.set(request.clientIP, request.edgeStartTimestamp);
         return true;
+    }
+    blockAndLogRequest(request, reason) {
+        this.addToBlocklist(request.clientIP, request.edgeStartTimestamp);
+        this.actionsLog.push(`Request blocked due to ${reason}: ${JSON.stringify(request, null, 2)}`);
     }
     removeOldBlockedIps() {
         const now = new Date();
@@ -53,6 +55,7 @@ class Firewall {
             const twelveHoursLater = new Date(blockedSince.getTime() + 12 * 60 * 60 * 1000);
             if (now >= twelveHoursLater) {
                 this.removeFromBlocklist(ip);
+                this.actionsLog.push(`IP unblocked after 12 hours: ${ip}`);
             }
         }
     }
@@ -62,27 +65,27 @@ class Firewall {
     isNonStandardPort(request) {
         return request.clientSrcPort < 49152 || request.clientSrcPort > 65535;
     }
-    isSqlInjection(request) {
-        const sqlInjectionPattern = /(\b(SELECT|DELETE|UPDATE|INSERT)\b|\bWHERE\b|=|--|\bOR\b)/i;
-        return sqlInjectionPattern.test(request.clientRequestPath);
-    }
-    isXssAttack(request) {
-        const xssPattern = /(<\s*script\b)|(\balert\s*\()|(<\s*img\b)|(<\s*a\b)|(<\s*body\b)|(<\s*iframe\b)|(<\s*input\b)|(<\s*form\b)|(<\s*div\b)/i;
-        return xssPattern.test(request.clientRequestPath);
+    isInjectionAttack(request) {
+        const injectionPattern = /(\b(SELECT|DELETE|UPDATE|INSERT)\b|\bWHERE\b|=|--|\bOR\b)|(<\s*script\b)|(\balert\s*\()|(<\s*img\b)|(<\s*a\b)|(<\s*body\b)|(<\s*iframe\b)|(<\s*input\b)|(<\s*form\b)|(<\s*div\b)/i;
+        return injectionPattern.test(request.clientRequestPath);
     }
     isDotSlashAttack(request) {
         return request.clientRequestPath.includes('/../');
     }
-    isTooFast(request) {
-        const lastRequestTime = this.lastRequestTimes[request.clientIP];
-        if (lastRequestTime) {
-            const timeDifference = request.edgeStartTimestamp.getTime() - lastRequestTime.getTime();
-            return timeDifference < 1000; // 1 second, adjust as needed
+    isDDoSAttack(request) {
+        const count = this.requestCounters.get(request.clientIP) || 0;
+        this.requestCounters.set(request.clientIP, count + 1);
+        // Check if the number of requests exceeds a limit (e.g., 1000 requests)
+        // in a certain period of time (e.g., 1 minute)
+        if (count > 1000) {
+            // Reset the counter
+            this.requestCounters.set(request.clientIP, 0);
+            return true;
         }
         return false;
     }
     isInAllowlist(request) {
-        const allowed = this.allowlist.includes(request.clientIP);
+        const allowed = this.allowlist.has(request.clientIP);
         if (allowed) {
             this.logAllowedRequest(request);
         }
@@ -109,15 +112,20 @@ class Firewall {
         return false;
     }
     logAllowedRequest(request) {
-        this.actionsLog.push(`Request allowed: ${JSON.stringify(request)}`);
+        this.actionsLog.push(`Request allowed: ${JSON.stringify(request, null, 2)}`);
     }
     logBlockedRequest(request) {
-        this.actionsLog.push(`Request blocked: ${JSON.stringify(request)}`);
+        this.actionsLog.push(`Request blocked: ${JSON.stringify(request, null, 2)}`);
     }
     addToBlocklist(ip, timestamp) {
         this.blocklist.add(ip);
         this.blocklistTimestamps.set(ip, timestamp);
         this.actionsLog.push(`IP added to blocklist: ${ip}`);
+        this.allowlist.delete(ip);
+    }
+    addToAllowlist(ip) {
+        this.allowlist.add(ip);
+        this.actionsLog.push(`IP added to Allow List: ${ip}`);
     }
     removeFromBlocklist(ip) {
         if (this.blocklist.has(ip)) {
@@ -138,6 +146,12 @@ class Firewall {
             }
         });
     }
+    printBlocklist() {
+        console.log('Blocklist:', Array.from(this.blocklist));
+    }
+    printAllowlist() {
+        console.log('Allowlist:', this.allowlist);
+    }
 }
 const firewall = new Firewall();
 fs.readFile('./datasets/dataset.csv', 'utf8', (err, data) => {
@@ -151,6 +165,33 @@ fs.readFile('./datasets/dataset.csv', 'utf8', (err, data) => {
         firewall.isAllowed(request);
     }
     firewall.printActionsLog();
+    // Start listening for user commands
+    const rl = readline.createInterface({
+        input: process.stdin,
+        output: process.stdout
+    });
+    rl.on('line', (input) => {
+        const [command, arg] = input.split(' ');
+        switch (command) {
+            case 'blocklist':
+                firewall.printBlocklist();
+                break;
+            case 'allowlist':
+                firewall.printAllowlist();
+                break;
+            case 'block':
+                firewall.addToBlocklist(arg, new Date());
+                break;
+            case 'unblock':
+                firewall.removeFromBlocklist(arg);
+                break;
+            case 'allow':
+                firewall.addToAllowlist(arg);
+                break;
+            default:
+                console.log('Unknown command:', command);
+        }
+    });
 });
 function createRequestFromLine(line) {
     const parts = line.split(',');
